@@ -3,30 +3,9 @@ const fs = require('fs');
 
 const meta = {
   name: 'ChatGPT Free (Conversational)',
-  path: '/chatgpt-free-convo',
-  method: ['get', 'post'],
-  category: 'ai',
-  params: [
-    {
-      name: 'prompt',
-      desc: 'The text prompt to send to the model',
-      example: 'Hello, how are you?',
-      required: true
-    },
-    {
-      name: 'uid',
-      desc: 'Unique user ID for conversation history',
-      example: 'user123',
-      required: true
-    },
-    {
-      name: 'model',
-      desc: "Optional model key: 'chatgpt4' (default) or 'chatgpt3'",
-      example: 'chatgpt4',
-      required: false,
-      options: ['chatgpt4', 'chatgpt3']
-    }
-  ]
+  path: '/chatgpt-free?prompt=&uid=&model=',
+  method: 'get',
+  category: 'ai'
 };
 
 const convoFile = 'convo.json';
@@ -47,187 +26,104 @@ if (!fs.existsSync(convoFile)) {
 }
 
 function loadConversation(uid, model) {
-  try {
-    const convos = JSON.parse(fs.readFileSync(convoFile, 'utf-8'));
-    const key = `${uid}_${model}`;
-    return convos[key] || [];
-  } catch (error) {
-    console.error('Error loading conversation:', error);
-    return [];
-  }
+  const convos = JSON.parse(fs.readFileSync(convoFile, 'utf-8'));
+  const key = `${uid}_${model}`;
+  return convos[key] || [];
 }
 
 function saveConversation(uid, model, messages) {
-  try {
-    const convos = JSON.parse(fs.readFileSync(convoFile, 'utf-8'));
-    const key = `${uid}_${model}`;
-    // Limit conversation history to last 20 messages to prevent token overflow
-    convos[key] = messages.slice(-20);
-    fs.writeFileSync(convoFile, JSON.stringify(convos, null, 2), 'utf-8');
-  } catch (error) {
-    console.error('Error saving conversation:', error);
-  }
+  const convos = JSON.parse(fs.readFileSync(convoFile, 'utf-8'));
+  const key = `${uid}_${model}`;
+  convos[key] = messages;
+  fs.writeFileSync(convoFile, JSON.stringify(convos, null, 2), 'utf-8');
 }
 
 function clearConversation(uid, model) {
-  try {
-    const convos = JSON.parse(fs.readFileSync(convoFile, 'utf-8'));
-    const key = `${uid}_${model}`;
-    delete convos[key];
-    fs.writeFileSync(convoFile, JSON.stringify(convos, null, 2), 'utf-8');
-  } catch (error) {
-    console.error('Error clearing conversation:', error);
-  }
+  const convos = JSON.parse(fs.readFileSync(convoFile, 'utf-8'));
+  const key = `${uid}_${model}`;
+  delete convos[key];
+  fs.writeFileSync(convoFile, JSON.stringify(convos, null, 2), 'utf-8');
 }
 
 async function onStart({ req, res }) {
   let prompt, uid, model;
   
-  // Handle both GET and POST methods
   if (req.method === 'POST') {
     ({ prompt, uid, model } = req.body);
   } else {
     ({ prompt, uid, model } = req.query);
   }
   
-  // Set default model if not provided
   model = model || 'chatgpt4';
 
-  // Validate required parameters
-  if (!prompt) {
-    return res.status(400).json({ 
-      error: 'Missing required parameter: prompt',
-      status: false 
+  if (!prompt || !uid) {
+    return res.status(400).json({
+      error: 'Both prompt and uid parameters are required',
+      example: '/chatgpt-free-convo?prompt=hello&uid=123&model=chatgpt4'
     });
   }
 
-  if (!uid) {
-    return res.status(400).json({ 
-      error: 'Missing required parameter: uid',
-      status: false,
-      message: 'Please provide a unique user ID (uid) to maintain conversation history'
-    });
-  }
-
-  // Validate model
   if (!model_list[model]) {
     return res.status(400).json({
-      error: `Invalid model. Available models: ${Object.keys(model_list).join(', ')}`,
-      status: false
+      error: `Invalid model. Available models: ${Object.keys(model_list).join(', ')}`
     });
   }
 
   try {
-    // Handle "clear" command to reset conversation
-    if (prompt.toLowerCase() === 'clear' || prompt.toLowerCase() === '/clear') {
+    // Handle "clear" command
+    if (prompt.toLowerCase() === 'clear') {
       clearConversation(uid, model);
-      return res.json({ 
-        status: true,
-        message: 'Conversation history cleared successfully.',
-        response: 'Conversation history has been reset.'
-      });
+      return res.json({ message: 'Conversation history cleared.' });
     }
 
-    // Load previous conversation history
+    // Load previous conversation
     let conversation = loadConversation(uid, model);
 
-    // Add new user message to history
+    // Add new user message
     conversation.push({ role: 'user', content: prompt });
 
-    // Build conversation context for the API
-    let fullPrompt;
-    if (conversation.length === 1) {
-      // Single message, no history
-      fullPrompt = prompt;
-    } else {
-      // Build context from previous exchanges
-      const contextLines = [];
-      for (let i = 0; i < conversation.length - 1; i++) {
-        const msg = conversation[i];
-        const role = msg.role === 'user' ? 'User' : 'Assistant';
-        contextLines.push(`${role}: ${msg.content}`);
-      }
-      contextLines.push(`User: ${prompt}`);
-      contextLines.push(`Assistant:`);
-      fullPrompt = contextLines.join('\n');
-    }
+    // Get the last user message for API (most APIs expect single prompt, not full history)
+    const lastUserMessage = conversation.filter(m => m.role === 'user').pop().content;
+    
+    // Build context from previous messages (optional - some APIs support it)
+    const contextHistory = conversation.slice(0, -1).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n');
+    const fullPrompt = contextHistory ? `${contextHistory}\nUser: ${lastUserMessage}\nAssistant:` : lastUserMessage;
 
-    // Get cookies from referer
-    let cookieHeader = undefined;
-    try {
-      const refererResp = await axios.get(model_list[model].referer, {
-        timeout: 5000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36'
-        }
-      });
-      const setCookie = refererResp.headers && refererResp.headers['set-cookie'];
-      if (setCookie) {
-        cookieHeader = Array.isArray(setCookie) ? setCookie.join('; ') : setCookie;
-      }
-    } catch (cookieError) {
-      console.warn('Could not fetch cookies, continuing without:', cookieError.message);
-    }
+    // Load referer to receive cookies if any
+    const refererResp = await axios.get(model_list[model].referer);
+    const setCookie = refererResp.headers && refererResp.headers['set-cookie'];
+    const cookieHeader = Array.isArray(setCookie) ? setCookie.join('; ') : undefined;
 
-    // Make API request to ChatGPT
-    const response = await axios.post(
+    const { data } = await axios.post(
       model_list[model].api,
       { prompt: fullPrompt },
       {
-        timeout: 30000,
         headers: {
-          'accept': '*/*',
+          accept: '*/*',
           'content-type': 'application/json',
-          'origin': 'https://stablediffusion.fr',
-          'referer': model_list[model].referer,
+          origin: 'https://stablediffusion.fr',
+          referer: model_list[model].referer,
           ...(cookieHeader ? { cookie: cookieHeader } : {}),
           'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36'
         }
       }
     );
 
-    // Extract answer from response
-    let answer = 'No response received.';
-    if (response.data) {
-      answer = response.data.message || response.data.response || response.data.answer || JSON.stringify(response.data);
-    }
+    const answer = data.message || 'No response received.';
 
-    // Clean up the answer if needed (remove any extra formatting)
-    if (typeof answer === 'string') {
-      answer = answer.trim();
-    }
-
-    // Save assistant response to conversation history
+    // Save assistant reply
     conversation.push({ role: 'assistant', content: answer });
     saveConversation(uid, model, conversation);
 
-    // Return success response
-    return res.json({
+    // Send response
+    res.json({
       status: true,
-      response: answer,
-      conversation_length: conversation.length / 2 // Number of exchanges
+      response: answer
     });
 
   } catch (error) {
-    console.error('ChatGPT Free Error:', error.message);
-    
-    // Handle specific error types
-    if (error.code === 'ECONNABORTED') {
-      return res.status(504).json({
-        status: false,
-        error: 'Request timeout - API took too long to respond'
-      });
-    }
-    
-    if (error.response) {
-      return res.status(error.response.status || 500).json({
-        status: false,
-        error: `API returned error: ${error.response.status}`,
-        details: error.response.data
-      });
-    }
-    
-    return res.status(500).json({
+    console.error('ChatGPT Free Conversational Error:', error.message);
+    res.status(500).json({
       status: false,
       error: error.message || 'Failed to get response from ChatGPT API'
     });
