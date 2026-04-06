@@ -29,7 +29,7 @@ const meta = {
   ]
 };
 
-const convoFile = 'chatgpt_convo.json';
+const convoFile = 'convo.json';
 const model_list = {
   chatgpt4: {
     api: 'https://stablediffusion.fr/gpt4/predict2',
