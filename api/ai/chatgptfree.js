@@ -5,7 +5,7 @@ const meta = {
   name: 'ChatGPT Free (Conversational)',
   path: '/chatgpt-free-convo?prompt=&uid=&model=',
   method: 'get',
-  category: 'AI'
+  category: 'ai'
 };
 
 const convoFile = 'convo.json';
